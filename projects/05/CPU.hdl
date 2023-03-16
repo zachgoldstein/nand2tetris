@@ -1,0 +1,112 @@
+// This file is part of www.nand2tetris.org
+// and the book "The Elements of Computing Systems"
+// by Nisan and Schocken, MIT Press.
+// File name: projects/05/CPU.hdl
+
+/**
+ * The Hack CPU (Central Processing unit), consisting of an ALU,
+ * two registers named A and D, and a program counter named PC.
+ * The CPU is designed to fetch and execute instructions written in 
+ * the Hack machine language. In particular, functions as follows:
+ * Executes the inputted instruction according to the Hack machine 
+ * language specification. The D and A in the language specification
+ * refer to CPU-resident registers, while M refers to the external
+ * memory location addressed by A, i.e. to Memory[A]. The inM input 
+ * holds the value of this location. If the current instruction needs 
+ * to write a value to M, the value is placed in outM, the address 
+ * of the target location is placed in the addressM output, and the 
+ * writeM control bit is asserted. (When writeM==0, any value may 
+ * appear in outM). The outM and writeM outputs are combinational: 
+ * they are affected instantaneously by the execution of the current 
+ * instruction. The addressM and pc outputs are clocked: although they 
+ * are affected by the execution of the current instruction, they commit 
+ * to their new values only in the next time step. If reset==1 then the 
+ * CPU jumps to address 0 (i.e. pc is set to 0 in next time step) rather 
+ * than to the address resulting from executing the current instruction. 
+
+ * instruction= aregMux[15] + dead[14] dead[13] inMmux[12]+ aluin[6..11] + aRegLoad[5] + dRegLoad[4] + writeM[3] + jump[0..2]
+ */
+
+CHIP CPU {
+
+    IN  inM[16],         // M value input  (M = contents of RAM[A])
+        instruction[16], // Instruction for execution
+        reset;           // Signals whether to re-start the current
+                         // program (reset==1) or continue executing
+                         // the current program (reset==0).
+
+    OUT outM[16],        // M value output
+        writeM,          // Write to M? 
+        addressM[15],    // Address in data memory (of M)
+        pc[15];          // address of next instruction
+
+    PARTS:
+
+    //ARegister
+    Mux16(a=instruction,b=aluoutareg,sel=instruction[15],out=muxaluandinstr);
+    //A register loads if opcode 0 or if control bit is true
+    Mux(a=true, b=instruction[5], sel=instruction[15], out=aRegLoadC);
+    ARegister(in=muxaluandinstr, load=aRegLoadC, out=aregout, out[0..14]=addressM);    
+
+    //writeM bit directly
+    Mux(a=false, b=instruction[3], sel=instruction[15], out=writeM);
+
+    Mux16(a=aregout,b=inM,sel=instruction[12],out=inMmuxAregout);
+
+    ALU(x=dregout, y=inMmuxAregout, 
+    zx=instruction[11], 
+    nx=instruction[10], 
+    zy=instruction[9], 
+    ny=instruction[8], 
+    f=instruction[7], 
+    no=instruction[6], 
+    out=outM, out=aluoutdreg, out=aluoutareg, 
+    zr=aluzr, ng=alung);
+
+    //DRegister
+    //Disable Dreg control bit if we are using A instruction. (sel = 0, enable, use instruction[3..5], else false)
+    Mux(a=false, b=instruction[4], sel=instruction[15], out=dRegC);
+    DRegister(in=aluoutdreg, load=dRegC, out=dregout);
+
+    DMux8Way(in=true, sel=instruction[0..2], a=nojump, b=jgt, c=jeq, d=jge, e=jlt, f=jne, g=jle, h=dojump);
+    Not(in=aluzr, out=notzr);
+    Not(in=alung, out=notng);
+
+    //jgt
+    And(a=notzr, b=notng, out=notzrandnotng);
+    And(a=jgt,b=notzrandnotng, out=jgtout);
+
+    //jeq
+    And(a=jeq,b=aluzr, out=jeqout);
+
+    //jge
+    Or(a=aluzr, b=notng, out=zrornotng);
+    And(a=jge, b=zrornotng, out=jgeout);
+
+    //jlt
+    And(a=notzr, b=alung, out=notzrandalung);
+    And(a=jlt, b=notzrandalung, out=jltout);
+
+    //jne
+    And(a=jne, b=notzr, out=jneout);
+
+    //jle
+    Or(a=aluzr, b=alung, out=aluzroralung);
+    And(a=jle, b=aluzroralung, out=jleout);
+
+    //Mux8Way (1bit)    
+    Mux(a=false, b=jgtout, sel=instruction[0], out=jmpmux0A);
+    Mux(a=jeqout, b=jgeout, sel=instruction[0], out=jmpmux0B);
+    Mux(a=jltout, b=jneout, sel=instruction[0], out=jmpmux0C);
+    Mux(a=jleout, b=true, sel=instruction[0], out=jmpmux0D);
+
+    Mux(a=jmpmux0A, b=jmpmux0B, sel=instruction[1], out=jmpmux1A);
+    Mux(a=jmpmux0C, b=jmpmux0D, sel=instruction[1], out=jmpmux1B);
+
+    Mux(a=jmpmux1A, b=jmpmux1B, sel=instruction[2], out=jmpout);
+
+    //Override, no jumps on A-instructions
+    Mux(a=false, b=jmpout, sel=instruction[15], out=jmpoutenable);
+    
+    PC(in=aregout,load=jmpoutenable,inc=true,reset=reset,out[0..14]=pc);
+}
